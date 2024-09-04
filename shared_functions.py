@@ -136,6 +136,21 @@ def compute_cond(ds):
     ds = ds["COND"]
     return ds
 
+def compute_pcp(ds):
+    ds = ds.assign(PCPT=(
+            ds.PCPRR
+            + ds.PCPRP
+            + ds.PCPRS
+            + ds.PCPRA
+            + ds.PCPRG
+            + ds.PCPRH
+            + ds.PCPRD
+        )
+        * 3600)
+
+    ds = ds["PCPT"]
+    return ds
+
 
 all_var = [
     "CAN_TEMP",

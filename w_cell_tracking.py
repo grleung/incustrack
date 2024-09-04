@@ -28,7 +28,7 @@ ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
 runs = [
-    "DRC1.1-R-V1",
+    'PHI1.1-R-V1','DRC1.1-R-V1','ARG1.2-R-V1'
 ]  # which model runs to process
 
 # separately I created a pkl file that contains the number of x,y points for each of the simulations
@@ -52,16 +52,17 @@ params["adaptive_stop"] = 1.0
 for run in runs:
     dataPath = f"{modelPath}/{run}/G3/out_30s/"
 
-    for grid in ["g3"]:
+    for grid, dmax in zip(['g1','g2',"g3"],[12800,2800,1700]):
         featPath = f"{outPath}/{run}/{grid}/w_features.pq"
-        savePath = f"{outPath}/{run}/{grid}/w_tracks_1850m.pq"
+        savePath = f"{outPath}/{run}/{grid}/w_tracks_vmax.pq"
 
         # assign dxy (horizontal grid spacing) based on grid
         dxy = get_xy_spacing(grid)
 
         # once we are running with separate predicted track speed for each simulation, that goes here
         # for now use just the same one
-        params["d_max"] = 1850
+        #params["d_max"] = dmax
+        params['v_max'] = 50
 
         # check if there is already a pickle file for w tracks so we don't re-do this
         # and check to make sure pickle file with features already exists

@@ -40,10 +40,8 @@ ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
 
-runs = ['DRC1.1-R-V1','ARG1.2-R-V1']# which model runs to process
-grids = [
-    "g1","g2",'g3'
-]  
+runs = ["PHI2.1-R-V1"]  # which model runs to process
+grids = ["g3"]
 
 # separately I created a pkl file that contains the min/max lat/lon for each of the simulations
 # having this as separate dataframe saves on some computational cost from re-calculating this
@@ -68,7 +66,7 @@ for run in runs:
     dataPath = f"{modelPath}/{run}/G3/out_30s/"
 
     # list of all timesteps where lite files are found in relevant folder
-    paths = [
+    all_paths = [
         p[:-6]
         for p in sorted(os.listdir(dataPath))
         if p.startswith("a-L") & p.endswith("-g3.h5")
@@ -77,59 +75,67 @@ for run in runs:
     latbounds = outbounds.loc[run].values
 
     for grid in grids:
-        savePath = f"{outPath}/{run}/{grid}/w_features.pq"
-
         if grid == "g3":
-            batch_size = 5
+            n = 16
         else:
-            batch_size = 20
+            n = 1
 
-        dxy = get_xy_spacing(grid)
+        for i, paths in enumerate(np.array_split(all_paths, n)):
+            savePath = f"{outPath}/{run}/{grid}/w_features_{str(i).zfill(2)}.pq"
 
-        ds = client.map(
-            get_rams_output,
-            [f"{dataPath}/{p}-{grid}.h5" for p in paths],
-            variables=["WP"],
-            
-            latbounds=latbounds,
-            latlon=True,
-            coords=True,
-            batch_size=batch_size,
-        )
+            if grid == "g3":
+                batch_size = 1
+            else:
+                batch_size = 20
 
-        ds = client.map(
-            xr.DataArray.expand_dims,
-            ds,
-            [{"time": [pd.to_datetime(p.split("/")[-1][4:])]} for p in paths],
-            batch_size=batch_size,
-        )
+            dxy = get_xy_spacing(grid)
 
-        ds = client.map(
-            xr.DataArray.to_iris,
-            ds,
-            batch_size=batch_size,
-        )
+            ds = client.map(
+                get_rams_output,
+                [f"{dataPath}/{p}-{grid}.h5" for p in paths],
+                variables=["WP"],
+                latbounds=latbounds,
+                latlon=True,
+                coords=True,
+                batch_size=batch_size,
+            )
 
-        feats = client.map(
-            tobac.feature_detection_multithreshold,
-            ds,
-            dxy=dxy,
-            vertical_coord="ztn",
-            **params,
-            batch_size=batch_size,
-        )
+            ds = client.map(
+                xr.DataArray.expand_dims,
+                ds,
+                [
+                    {"time": [pd.to_datetime(p.split("/")[-1][4:])]}
+                    for p in paths
+                ],
+                batch_size=batch_size,
+            )
 
-        all_features = client.gather(feats)
+            ds = client.map(
+                xr.DataArray.to_iris,
+                ds,
+                batch_size=batch_size,
+            )
 
-        # once loop is finished, concatenate all the figures
-        # then save it to a parquet file
-        all_features = combine_tobac_list(all_features)
+            feats = client.map(
+                tobac.feature_detection_multithreshold,
+                ds,
+                dxy=dxy,
+                vertical_coord="ztn",
+                **params,
+                batch_size=batch_size,
+            )
 
-        # just make sure all directories exist
-        if not os.path.isdir(f"{outPath}/{run}"):
-            os.mkdir(f"{outPath}/{run}")
+            all_features = client.gather(feats)
 
-        if not os.path.isdir(f"{outPath}/{run}/{grid}"):
-            os.mkdir(f"{outPath}/{run}/{grid}")
+            # once loop is finished, concatenate all the figures
+            # then save it to a parquet file
+            all_features = combine_tobac_list(all_features)
 
-        save_files(all_features, savePath)
+            # just make sure all directories exist
+            if not os.path.isdir(f"{outPath}/{run}"):
+                os.mkdir(f"{outPath}/{run}")
+
+            if not os.path.isdir(f"{outPath}/{run}/{grid}"):
+                os.mkdir(f"{outPath}/{run}/{grid}")
+
+            save_files(all_features, savePath)
