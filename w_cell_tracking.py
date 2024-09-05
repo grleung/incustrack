@@ -2,8 +2,7 @@
 # to form cell tracks then subset those tracks which do not go within 9.6km of domain edges
 # and which last longer than 2 minutes
 
-# inputs: expected storm motion velocity from Peter/IT [to follow]
-#         tobac output dataframe of features (from w_feature_identification)
+# inputs: tobac output dataframe of features (from w_feature_identification)
 # output: tobac output dataframe of tracked cells
 
 # To run this script, just do "python w_cell_tracking.py" in command line.
@@ -20,15 +19,16 @@ import xarray as xr
 import datetime as dt
 import tobac
 
-
 from shared_functions import get_xy_spacing, save_files
 
 # Define the paths to INCUS data and where to save output
 ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
-runs = [
-    'PHI1.1-R-V1','DRC1.1-R-V1','ARG1.2-R-V1'
+runs = ['PHI1.1-R-V1',
+    'PHI2.1-R-V1',
+    'DRC1.1-R-V1',
+    'ARG1.2-R-V1'
 ]  # which model runs to process
 
 # separately I created a pkl file that contains the number of x,y points for each of the simulations
@@ -50,32 +50,26 @@ params["adaptive_stop"] = 1.0
 
 # actual loop
 for run in runs:
+    print(run)
     dataPath = f"{modelPath}/{run}/G3/out_30s/"
 
     for grid, dmax in zip(['g1','g2',"g3"],[12800,2800,1700]):
+        print(grid)
         featPath = f"{outPath}/{run}/{grid}/w_features.pq"
-        savePath = f"{outPath}/{run}/{grid}/w_tracks_vmax.pq"
+        savePath = f"{outPath}/{run}/{grid}/w_tracks.pq"
 
         # assign dxy (horizontal grid spacing) based on grid
         dxy = get_xy_spacing(grid)
 
-        # once we are running with separate predicted track speed for each simulation, that goes here
-        # for now use just the same one
-        #params["d_max"] = dmax
-        params['v_max'] = 50
+        # the d_max comes from the mean 25th percentile nearest neighbor distance (see Bee's ppt documenting this
+        # on SharePoint under INCUS_LES_Tracking_ScienceDatabase)
+        # these values are different per grid, but the same for all domains
+        params["d_max"] = dmax
 
         # check if there is already a pickle file for w tracks so we don't re-do this
         # and check to make sure pickle file with features already exists
-        # if (not os.path.exists(savePath)) & (os.path.exists(featPath)):
+        #if (not os.path.exists(savePath)) & (os.path.exists(featPath)):
         if True:
-            nx = outx.loc[run, grid]
-            ny = outy.loc[
-                run,
-                grid,
-            ]
-            min_h1, max_h1 = 9600 / dxy, ny - 9600 / dxy
-            min_h2, max_h2 = 9600 / dxy, nx - 9600 / dxy
-
             features = pd.read_parquet(featPath)
 
             # Perform linking and save results:
@@ -98,6 +92,16 @@ for run in runs:
             ]
 
             # second filter out cells near the edges of the nested grid
+            nx = outx.loc[run, grid]
+            ny = outy.loc[run, grid]
+
+            # define how near to the boundary features are allowed to be
+            # right now, we delete any feature that is within 1600m of the boundaries of the g3 lat/lon bounding box
+            # that is 1 pt for g1, 4 pts for g2, 16 pts for g3
+            # this is so that we exclude the sponge zone for g3 (which is 8 points)
+            min_h1, max_h1 = 1600 / dxy, ny - 1600 / dxy
+            min_h2, max_h2 = 1600 / dxy, nx - 1600 / dxy
+
 
             # make sure lat lon are float
             out_tracks["lat"] = out_tracks["lat"].astype("float")

@@ -6,7 +6,7 @@
 
 # This script is parallelized with dask distributed. To run from command line
 # run "dask scheduler &" then "dask workers tcp::/scheduler:port --nworkers NW --nthreads NT --memory-limit "MEM GiB"
-# I usually use NW = 30, NT = 1, MEM = 30 GiB, but haven't really experimented with this.
+# I usually use NW = 30, NT = 1, MEM = 30 GiB on downdraft, but haven't really experimented with this.
 # then run "python w_feature_identification.py"
 # Make sure that the client below is the same as the client address of your scheduler.
 # Pretty sure this is the default and should work, but I may be wrong.
@@ -21,7 +21,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import tobac
+import glob
 
+#change this address depending on your scheduler address
 client = dd.Client("tcp://129.82.20.48:8786")
 client.upload_file("shared_functions.py")
 
@@ -67,29 +69,38 @@ for run in runs:
 
     # list of all timesteps where lite files are found in relevant folder
     all_paths = [
-        p[:-6]
-        for p in sorted(os.listdir(dataPath))
-        if p.startswith("a-L") & p.endswith("-g3.h5")
+        p.split('/')[-1][:-6]
+        for p in sorted(glob.glob(f"{dataPath}/a-L-*-g3.h5"))
     ]
 
     latbounds = outbounds.loc[run].values
 
     for grid in grids:
+
+        # For some of the g3 domains, I had some issues with too much data being loaded into memory at once, 
+        # so I split up feature detection into multiple subsets
         if grid == "g3":
-            n = 16
+            n_split = 16
         else:
-            n = 1
+            n_split = 1
 
-        for i, paths in enumerate(np.array_split(all_paths, n)):
-            savePath = f"{outPath}/{run}/{grid}/w_features_{str(i).zfill(2)}.pq"
+        for i, paths in enumerate(np.array_split(all_paths, n_split)):
+            if (grid == "g3"):
+                savedfPath = (
+                    f"{outPath}/{run}/{grid}/w_seg_{str(i).zfill(2)}.pq"
+                )
+            else:
+                savedfPath = f"{outPath}/{run}/{grid}/w_seg.pq"
 
+            # batch size is how may batches to submit the tasks in the list [paths] to scheduler
             if grid == "g3":
-                batch_size = 1
+                batch_size = 2
             else:
                 batch_size = 20
 
             dxy = get_xy_spacing(grid)
 
+            # prep data for feeding to tobac
             ds = client.map(
                 get_rams_output,
                 [f"{dataPath}/{p}-{grid}.h5" for p in paths],
@@ -116,6 +127,7 @@ for run in runs:
                 batch_size=batch_size,
             )
 
+            # actual tobac run
             feats = client.map(
                 tobac.feature_detection_multithreshold,
                 ds,
@@ -125,6 +137,7 @@ for run in runs:
                 batch_size=batch_size,
             )
 
+            # take all the features from tobac run
             all_features = client.gather(feats)
 
             # once loop is finished, concatenate all the figures
@@ -139,3 +152,5 @@ for run in runs:
                 os.mkdir(f"{outPath}/{run}/{grid}")
 
             save_files(all_features, savePath)
+
+
