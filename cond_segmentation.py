@@ -6,8 +6,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import tobac
+import glob
 
-client = dd.Client("tcp://129.82.20.217:8786")
+client = dd.Client("tcp://129.82.20.48:8786")
 client.upload_file("shared_functions.py")
 
 from shared_functions import (
@@ -28,7 +29,7 @@ from shared_functions import (
 ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
-runs = ["PHI1.1-R-V1"]  # which model runs to process
+runs = ['DRC1.1-R-V1','PHI1.1-R-V1','ARG1.2-R-V1','PHI2.1-R-V1']  # which model runs to process
 grids = ["g3"]
 
 # parameters for segmentation
@@ -49,91 +50,107 @@ for run in runs:
 
     # list of all timesteps where lite files are found in relevant folder
     all_paths = [
-        p[:-6]
-        for p in sorted(os.listdir(dataPath))
-        if p.startswith("a-L") & p.endswith("-g3.h5")
+        p.split('/')[-1][:-6]
+        for p in sorted(glob.glob(f"{dataPath}/a-L-*-g3.h5"))
     ]
 
-    for i, paths in enumerate(np.array_split(all_paths, 16)):
+
+    latbounds = outbounds.loc[run].values
+
+    for grid in grids:
+        trackPath = f"{outPath}/{run}/{grid}/w_tracks.pq"
+        tracks = pd.read_parquet(trackPath)
+
+        if grid == "g3":
+            n = 16
+            batch_size = 1
+            all_paths = enumerate(np.array_split(all_paths, n))
+        elif grid=='g2':
+            n = 5
+            batch_size = 1
+            all_paths = enumerate(np.array_split(all_paths, n))
+        else:
+            n = 1
+            batch_size = 20
+            all_paths = enumerate([all_paths])
+
+        for i, paths in all_paths:
             times = [pd.to_datetime(p.split("/")[-1][4:]) for p in paths]
+            
+            savemaskPath = f"{outPath}/{run}/{grid}/cond_masks/"
 
-            latbounds = outbounds.loc[run].values
-
-            for grid in grids:
-                trackPath = f"{outPath}/{run}/{grid}/w_tracks.pq"
-                tracks = pd.read_parquet(trackPath)
-
+            if grid != "g1":
+                batch_size = 1
                 savedfPath = f"{outPath}/{run}/{grid}/cond_seg_{str(i).zfill(2)}.pq"
-                savemaskPath = f"{outPath}/{run}/{grid}/cond_masks/"
+            
+            else:
+                batch_size = 20
+                savedfPath = f"{outPath}/{run}/{grid}/cond_seg.pq"
+            
 
-                if grid == "g3":
-                    batch_size = 1
-                else:
-                    batch_size = 20
+            dxy = get_xy_spacing(grid)
 
-                dxy = get_xy_spacing(grid)
+            ds = client.map(
+                get_rams_output,
+                [f"{dataPath}/{p}-{grid}.h5" for p in paths],
+                variables=["RCP", "RSP", "RPP", "PI", "THETA", "RV"],
+                latbounds=latbounds,
+                latlon=True,
+                coords=True,
+                batch_size=batch_size,
+            )
 
-                ds = client.map(
-                    get_rams_output,
-                    [f"{dataPath}/{p}-{grid}.h5" for p in paths],
-                    variables=["RCP", "RSP", "RPP", "PI", "THETA", "RV"],
-                    latbounds=latbounds,
-                    latlon=True,
-                    coords=True,
-                    batch_size=batch_size,
+            ds = client.map(compute_cond, ds, batch_size=batch_size)
+
+            print(len(ds), len(times))
+            ds = client.map(
+                xr.DataArray.expand_dims,
+                ds,
+                [{"time": [t]} for t in times],
+                batch_size=batch_size,
+            )
+
+            ds = client.map(
+                xr.DataArray.to_iris,
+                ds,
+                batch_size=batch_size,
+            )
+
+            out = client.map(
+                tobac.segmentation.segmentation,
+                [tracks[tracks.time == t] for t in times],
+                ds,
+                dxy=dxy,
+                **params,
+                batch_size=batch_size,
+            )
+
+            out = client.gather(out)
+
+            all_segments = [o[1] for o in out]
+            all_masks = [o[0] for o in out]
+
+            # just make sure all directories exist
+            if not os.path.isdir(f"{outPath}/{run}"):
+                os.mkdir(f"{outPath}/{run}")
+
+            if not os.path.isdir(f"{outPath}/{run}/{grid}"):
+                os.mkdir(f"{outPath}/{run}/{grid}")
+
+            # once loop is finished, concatenate all the figures
+            # then save it to a parquet file
+            all_segments = combine_tobac_list(all_segments)
+            save_files(all_segments, savedfPath)
+
+            if not os.path.isdir(savemaskPath):
+                os.mkdir(savemaskPath)
+
+            for m, p in zip(all_masks, paths):
+                ds = xr.DataArray.from_iris(m)
+                ds.to_netcdf(
+                    f"{savemaskPath}/{p}.h5",
+                    engine="h5netcdf",
+                    encoding={
+                        "segmentation_mask": {"zlib": True, "complevel": 9}
+                    },
                 )
-
-                ds = client.map(compute_cond, ds, batch_size=batch_size)
-
-                print(len(ds), len(times))
-                ds = client.map(
-                    xr.DataArray.expand_dims,
-                    ds,
-                    [{"time": [t]} for t in times],
-                    batch_size=batch_size,
-                )
-
-                ds = client.map(
-                    xr.DataArray.to_iris,
-                    ds,
-                    batch_size=batch_size,
-                )
-
-                out = client.map(
-                    tobac.segmentation.segmentation,
-                    [tracks[tracks.time == t] for t in times],
-                    ds,
-                    dxy=dxy,
-                    **params,
-                    batch_size=batch_size,
-                )
-
-                out = client.gather(out)
-
-                all_segments = [o[1] for o in out]
-                all_masks = [o[0] for o in out]
-
-                # just make sure all directories exist
-                if not os.path.isdir(f"{outPath}/{run}"):
-                    os.mkdir(f"{outPath}/{run}")
-
-                if not os.path.isdir(f"{outPath}/{run}/{grid}"):
-                    os.mkdir(f"{outPath}/{run}/{grid}")
-
-                # once loop is finished, concatenate all the figures
-                # then save it to a parquet file
-                all_segments = combine_tobac_list(all_segments)
-                save_files(all_segments, savedfPath)
-
-                if not os.path.isdir(savemaskPath):
-                    os.mkdir(savemaskPath)
-
-                for m, p in zip(all_masks, paths):
-                    ds = xr.DataArray.from_iris(m)
-                    ds.to_netcdf(
-                        f"{savemaskPath}/{p}.h5",
-                        engine="h5netcdf",
-                        encoding={
-                            "segmentation_mask": {"zlib": True, "complevel": 9}
-                        },
-                    )
