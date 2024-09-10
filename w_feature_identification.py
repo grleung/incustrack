@@ -23,8 +23,8 @@ import xarray as xr
 import tobac
 import glob
 
-#change this address depending on your scheduler address
-client = dd.Client("tcp://129.82.20.48:8786")
+# change this address depending on your scheduler address
+client = dd.Client("tcp://129.82.20.217:8786")
 client.upload_file("shared_functions.py")
 
 from shared_functions import (
@@ -42,7 +42,7 @@ ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
 
-runs = ["PHI2.1-R-V1"]  # which model runs to process
+runs = ["AUS1.1-R-V1"]  # which model runs to process
 grids = ["g3"]
 
 # separately I created a pkl file that contains the min/max lat/lon for each of the simulations
@@ -69,7 +69,7 @@ for run in runs:
 
     # list of all timesteps where lite files are found in relevant folder
     all_paths = [
-        p.split('/')[-1][:-6]
+        p.split("/")[-1][:-6]
         for p in sorted(glob.glob(f"{dataPath}/a-L-*-g3.h5"))
     ]
 
@@ -77,7 +77,7 @@ for run in runs:
 
     for grid in grids:
 
-        # For some of the g3 domains, I had some issues with too much data being loaded into memory at once, 
+        # For some of the g3 domains, I had some issues with too much data being loaded into memory at once,
         # so I split up feature detection into multiple subsets
         if grid == "g3":
             n_split = 16
@@ -85,12 +85,12 @@ for run in runs:
             n_split = 1
 
         for i, paths in enumerate(np.array_split(all_paths, n_split)):
-            if (grid == "g3"):
+            if grid == "g3":
                 savedfPath = (
-                    f"{outPath}/{run}/{grid}/w_seg_{str(i).zfill(2)}.pq"
+                    f"{outPath}/{run}/{grid}/w_features_{str(i).zfill(2)}.pq"
                 )
             else:
-                savedfPath = f"{outPath}/{run}/{grid}/w_seg.pq"
+                savedfPath = f"{outPath}/{run}/{grid}/w_features.pq"
 
             # batch size is how may batches to submit the tasks in the list [paths] to scheduler
             if grid == "g3":
@@ -151,6 +151,4 @@ for run in runs:
             if not os.path.isdir(f"{outPath}/{run}/{grid}"):
                 os.mkdir(f"{outPath}/{run}/{grid}")
 
-            save_files(all_features, savePath)
-
-
+            save_files(all_features, savedfPath)
