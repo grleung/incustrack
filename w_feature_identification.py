@@ -24,7 +24,7 @@ import tobac
 import glob
 
 # change this address depending on your scheduler address
-client = dd.Client("tcp://129.82.20.217:8786")
+client = dd.Client("tcp://129.82.20.217:8786")  # bee on downdraft
 client.upload_file("shared_functions.py")
 
 from shared_functions import (

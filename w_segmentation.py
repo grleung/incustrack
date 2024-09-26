@@ -8,7 +8,7 @@ import xarray as xr
 import tobac
 import glob
 
-client = dd.Client("tcp://129.82.20.217:8786")
+client = dd.Client("tcp://129.82.20.217:8786")  # donwdraft
 client.upload_file("shared_functions.py")
 
 from shared_functions import (
@@ -26,10 +26,10 @@ from shared_functions import (
 )
 
 # Define the paths to INCUS data and where to save output
-ver = "V1"  # version of INCUS simulation dataset
+ver = "V1"  # version of INCUS simulation datasetls /m
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
-runs = ["PHI2.1-R-V1","DRC1.1-R-V1"]  # which model runs to process
+runs = ['AUS1.1-R-V1']  # which model runs to process
 grids = ["g3"]
 
 # parameters for segmentation
@@ -48,13 +48,13 @@ outbounds = pd.read_pickle(f"/tempest/gleung/incustrack/bounds.pkl")
 for run in runs:
     dataPath = f"{modelPath}/{run}/G3/out_30s/"
 
-    # list of all timesteps where lite files are found in relevant folder
-    all_paths = [
-        p.split('/')[-1][:-6]
-        for p in sorted(glob.glob(f"{dataPath}/a-L-*-g3.h5"))
-    ]
-
     for grid in grids:
+        # list of all timesteps where lite files are found in relevant folder
+        all_paths = [
+            p.split("/")[-1][:-6]
+            for p in sorted(glob.glob(f"{dataPath}/a-L-*-g3.h5"))
+        ]
+
         dxy = get_xy_spacing(grid)
         trackPath = f"{outPath}/{run}/{grid}/w_tracks.pq"
         tracks = pd.read_parquet(trackPath)
@@ -62,29 +62,32 @@ for run in runs:
         savemaskPath = f"{outPath}/{run}/{grid}/w_masks/"
 
         if grid == "g3":
-            n = 16
+            n = 32
             batch_size = 1
             all_paths = enumerate(np.array_split(all_paths, n))
-        elif grid=='g2':
+        elif grid == "g2":
             n = 5
             batch_size = 1
             all_paths = enumerate(np.array_split(all_paths, n))
         else:
             n = 1
             batch_size = 20
-            all_paths = enumerate([all_paths])
+            all_paths = enumerate(np.array_split(all_paths, 1))
 
         for i, paths in all_paths:
-                times = [pd.to_datetime(p.split("/")[-1][4:]) for p in paths]
 
-                latbounds = outbounds.loc[run].values
+            times = [pd.to_datetime(p.split("/")[-1][4:]) for p in paths]
 
-                if (grid == "g3") or (grid=='g2'):
-                    savedfPath = (
-                        f"{outPath}/{run}/{grid}/w_seg_{str(i).zfill(2)}.pq"
-                    )
-                else:
-                    savedfPath = f"{outPath}/{run}/{grid}/w_seg.pq"
+            latbounds = outbounds.loc[run].values
+
+            if (grid == "g3") or (grid == "g2"):
+                savedfPath = (
+                    f"{outPath}/{run}/{grid}/w_seg_{str(i).zfill(2)}.pq"
+                )
+            else:
+                savedfPath = f"{outPath}/{run}/{grid}/w_seg.pq"
+
+            if not os.path.exists(savedfPath):
 
                 ds = client.map(
                     get_rams_output,

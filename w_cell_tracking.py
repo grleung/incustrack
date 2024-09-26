@@ -25,11 +25,7 @@ from shared_functions import get_xy_spacing, save_files
 ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
-runs = ['PHI1.1-R-V1',
-    'PHI2.1-R-V1',
-    'DRC1.1-R-V1',
-    'ARG1.2-R-V1'
-]  # which model runs to process
+runs = ["AUS1.1-R-V1"]  # which model runs to process
 
 # separately I created a pkl file that contains the number of x,y points for each of the simulations
 # having this as separate dataframe saves on some computational cost from re-calculating this
@@ -53,7 +49,7 @@ for run in runs:
     print(run)
     dataPath = f"{modelPath}/{run}/G3/out_30s/"
 
-    for grid, dmax in zip(['g1','g2',"g3"],[12800,2800,1700]):
+    for grid, dmax in zip(["g1", "g2",'g3'], [12800, 2800, 1700]):  # , "g3"],
         print(grid)
         featPath = f"{outPath}/{run}/{grid}/w_features.pq"
         savePath = f"{outPath}/{run}/{grid}/w_tracks.pq"
@@ -68,7 +64,7 @@ for run in runs:
 
         # check if there is already a pickle file for w tracks so we don't re-do this
         # and check to make sure pickle file with features already exists
-        #if (not os.path.exists(savePath)) & (os.path.exists(featPath)):
+        # if (not os.path.exists(savePath)) & (os.path.exists(featPath)):
         if True:
             features = pd.read_parquet(featPath)
 
@@ -101,7 +97,6 @@ for run in runs:
             # this is so that we exclude the sponge zone for g3 (which is 8 points)
             min_h1, max_h1 = 1600 / dxy, ny - 1600 / dxy
             min_h2, max_h2 = 1600 / dxy, nx - 1600 / dxy
-
 
             # make sure lat lon are float
             out_tracks["lat"] = out_tracks["lat"].astype("float")

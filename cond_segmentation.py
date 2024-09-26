@@ -8,7 +8,7 @@ import xarray as xr
 import tobac
 import glob
 
-client = dd.Client("tcp://129.82.20.48:8786")
+client = dd.Client("downdraft:8786")
 client.upload_file("shared_functions.py")
 
 from shared_functions import (
@@ -29,7 +29,9 @@ from shared_functions import (
 ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
-runs = ['DRC1.1-R-V1','PHI1.1-R-V1','ARG1.2-R-V1','PHI2.1-R-V1']  # which model runs to process
+runs = [
+    'AUS1.1-R-V1'
+]  # which model runs to process
 grids = ["g3"]
 
 # parameters for segmentation
@@ -48,24 +50,23 @@ outbounds = pd.read_pickle(f"/tempest/gleung/incustrack/bounds.pkl")
 for run in runs:
     dataPath = f"{modelPath}/{run}/G3/out_30s/"
 
-    # list of all timesteps where lite files are found in relevant folder
-    all_paths = [
-        p.split('/')[-1][:-6]
-        for p in sorted(glob.glob(f"{dataPath}/a-L-*-g3.h5"))
-    ]
-
-
     latbounds = outbounds.loc[run].values
 
     for grid in grids:
+        # list of all timesteps where lite files are found in relevant folder
+        all_paths = [
+            p.split("/")[-1][:-6]
+            for p in sorted(glob.glob(f"{dataPath}/a-L-*-g3.h5"))
+        ]
+
         trackPath = f"{outPath}/{run}/{grid}/w_tracks.pq"
         tracks = pd.read_parquet(trackPath)
 
         if grid == "g3":
-            n = 16
+            n = 40
             batch_size = 1
             all_paths = enumerate(np.array_split(all_paths, n))
-        elif grid=='g2':
+        elif grid == "g2":
             n = 5
             batch_size = 1
             all_paths = enumerate(np.array_split(all_paths, n))
@@ -76,17 +77,18 @@ for run in runs:
 
         for i, paths in all_paths:
             times = [pd.to_datetime(p.split("/")[-1][4:]) for p in paths]
-            
+
             savemaskPath = f"{outPath}/{run}/{grid}/cond_masks/"
 
             if grid != "g1":
                 batch_size = 1
-                savedfPath = f"{outPath}/{run}/{grid}/cond_seg_{str(i).zfill(2)}.pq"
-            
+                savedfPath = (
+                    f"{outPath}/{run}/{grid}/cond_seg_{str(i).zfill(2)}.pq"
+                )
+
             else:
                 batch_size = 20
                 savedfPath = f"{outPath}/{run}/{grid}/cond_seg.pq"
-            
 
             dxy = get_xy_spacing(grid)
 
@@ -102,7 +104,6 @@ for run in runs:
 
             ds = client.map(compute_cond, ds, batch_size=batch_size)
 
-            print(len(ds), len(times))
             ds = client.map(
                 xr.DataArray.expand_dims,
                 ds,
