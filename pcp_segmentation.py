@@ -30,13 +30,13 @@ from shared_functions import (
 ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
-runs = ['DRC1.1-R-V1','PHI1.1-R-V1','ARG1.2-R-V1','PHI2.1-R-V1']  # which model runs to process
-grids = ["g3"]
+runs = ["AUS1.1-R-V1"]  # which model runs to process
+grids = ['g3']
 
 # parameters for segmentation
 params = {}
 params["method"] = "watershed"
-params["threshold"] = .01  # mm/hr mixing ratio
+params["threshold"] = 0.01  # mm/hr mixing ratio
 
 # separately I created a pkl file that contains the min/max lat/lon for each of the simulations
 # having this as separate dataframe saves on some computational cost from re-calculating this
@@ -47,14 +47,14 @@ outbounds = pd.read_pickle(f"/tempest/gleung/incustrack/bounds.pkl")
 for run in runs:
     dataPath = f"{modelPath}/{run}/G3/out_30s/"
 
-    # list of all timesteps where lite files are found in relevant folder
-    all_paths = [
-        p.split('/')[-1][:-6]
-        for p in sorted(glob.glob(f"{dataPath}/a-L-*-g3.h5"))
-    ]
-
 
     for grid in grids:
+        # list of all timesteps where lite files are found in relevant folder
+        all_paths = [
+            p.split("/")[-1][:-6]
+            for p in sorted(glob.glob(f"{dataPath}/a-L-*-g3.h5"))
+        ]
+        
         dxy = get_xy_spacing(grid)
         trackPath = f"{outPath}/{run}/{grid}/w_tracks.pq"
         tracks = pd.read_parquet(trackPath)
@@ -64,7 +64,7 @@ for run in runs:
         n = 1
         batch_size = 20
         all_paths = enumerate([all_paths])
-    
+
         for i, paths in all_paths:
             times = [pd.to_datetime(p.split("/")[-1][4:]) for p in paths]
 
@@ -75,13 +75,15 @@ for run in runs:
             ds = client.map(
                 get_rams_output,
                 [f"{dataPath}/{p}-{grid}.h5" for p in paths],
-                variables=["PCPRR",
-                            "PCPRP",
-                            "PCPRS",
-                            "PCPRA",
-                            "PCPRG",
-                            "PCPRH",
-                            "PCPRD",],
+                variables=[
+                    "PCPRR",
+                    "PCPRP",
+                    "PCPRS",
+                    "PCPRA",
+                    "PCPRG",
+                    "PCPRH",
+                    "PCPRD",
+                ],
                 latbounds=latbounds,
                 latlon=True,
                 coords=True,
