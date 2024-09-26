@@ -33,7 +33,12 @@ rams_dims_anal = {
 
 
 def get_rams_output(
-    path, variables, latbounds=None, dims=rams_dims_lite, latlon=True, coords=True
+    path,
+    variables,
+    latbounds=None,
+    dims=rams_dims_lite,
+    latlon=True,
+    coords=True,
 ):
     time = pd.to_datetime(path.split("/")[-1][4:-6])
     grid = path.split("/")[-1][-5:-3]
@@ -52,6 +57,7 @@ def get_rams_output(
     )
 
     ds = rename_dims(ds, dims)
+    ds = ds.unify_chunks()
 
     if grid != "g3":
         ds = subset_data(ds, latbounds)
@@ -98,7 +104,7 @@ def get_xy_spacing(grid):
         return 100
 
 
-def subset_data(ds, latbounds):
+def subset_data_dep(ds, latbounds):
     # takes an xarray dataset ds from RAMS output and selects only
     # the values within the defined lat/lon boundaries
     ds = (
@@ -114,6 +120,15 @@ def subset_data(ds, latbounds):
 
     return ds
 
+def subset_data(ds, latbounds):
+    # takes an xarray dataset ds from RAMS output and selects only
+    # the values within the defined lat/lon boundaries
+    masky = ds.Y.where((ds.GLAT>=latbounds[0]) & (ds.GLAT<=latbounds[1]) & (ds.GLON>=latbounds[2]) & (ds.GLON<=latbounds[3])).dropna(dim='X',how='all').dropna(dim='Y',how='all').values
+    maskx = ds.X.where((ds.GLAT>=latbounds[0]) & (ds.GLAT<=latbounds[1]) & (ds.GLON>=latbounds[2]) & (ds.GLON<=latbounds[3])).dropna(dim='X',how='all').dropna(dim='Y',how='all').values
+
+    ds = ds.sel(Y=slice(np.nanmin(masky).astype('int'),np.nanmax(masky).astype('int')+1),X=slice(np.nanmin(maskx).astype('int'),np.nanmax(maskx).astype('int')+1))
+    return ds
+
 
 def combine_tobac_list(features_list):
     # takes a list of tobac output dataframes and combines them into one dataframe
@@ -126,18 +141,23 @@ def save_files(out, savePath):
     out.to_parquet(savePath, engine="pyarrow")
 
 
-def compute_cond(ds):
+def compute_cond(ds,return_dens=False):
     ds = ds.assign(PRES=p00 * (ds.PI / cp) ** (cp / rd))
     ds = ds.assign(TEMP=ds.THETA * (ds.PI / cp))
     ds = ds.assign(DENS=ds.PRES / (rd * ds.TEMP * (1 + (0.61 * ds.RV))))
 
     ds = ds.assign(COND=(ds.RCP + ds.RSP + ds.RPP) * ds.DENS)
 
-    ds = ds["COND"]
+    if return_dens:
+        ds = ds[['COND','DENS']]
+    else:
+        ds = ds["COND"]
     return ds
 
+
 def compute_pcp(ds):
-    ds = ds.assign(PCPT=(
+    ds = ds.assign(
+        PCPT=(
             ds.PCPRR
             + ds.PCPRP
             + ds.PCPRS
@@ -146,10 +166,28 @@ def compute_pcp(ds):
             + ds.PCPRH
             + ds.PCPRD
         )
-        * 3600)
+        * 3600
+    )
 
     ds = ds["PCPT"]
     return ds
+
+
+nz = 232
+
+
+def read_header(dataPath, p, nz, var="__ztn01", varname="z"):
+    # fxn to read thermodynamic z from header file
+    header_file_name = (
+        f"{dataPath}/{p.split('/')[-1].split('.')[0][:-2]}head.txt"
+    )
+    with open(header_file_name) as f:
+        mylist = f.read().splitlines()
+    ix = mylist.index(var)
+    numlines = int(mylist[ix + 1])
+    coord = mylist[ix + 2 : ix + 2 + numlines]
+    coord = np.array([float(x) for x in coord])
+    return coord
 
 
 all_var = [
