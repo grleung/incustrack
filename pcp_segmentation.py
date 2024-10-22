@@ -8,7 +8,7 @@ import xarray as xr
 import tobac
 import glob
 
-client = dd.Client("tcp://129.82.20.48:8786")
+client = dd.Client("updraft:8786")
 client.upload_file("shared_functions.py")
 
 from shared_functions import (
@@ -30,8 +30,9 @@ from shared_functions import (
 ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
-runs = ["AUS1.1-R-V1"]  # which model runs to process
-grids = ['g3']
+runs = ['USA1.1-R-V1','WPO1.1-R-V1']
+grids =['g3']
+
 
 # parameters for segmentation
 params = {}
@@ -44,11 +45,10 @@ params["threshold"] = 0.01  # mm/hr mixing ratio
 outbounds = pd.read_pickle(f"/tempest/gleung/incustrack/bounds.pkl")
 
 # loop through each of the runs
-for run in runs:
-    dataPath = f"{modelPath}/{run}/G3/out_30s/"
-
-
-    for grid in grids:
+for grid in grids:
+    for run in runs:
+        dataPath = f"{modelPath}/{run}/G3/out_30s/"
+    
         # list of all timesteps where lite files are found in relevant folder
         all_paths = [
             p.split("/")[-1][:-6]
@@ -56,7 +56,7 @@ for run in runs:
         ]
         
         dxy = get_xy_spacing(grid)
-        trackPath = f"{outPath}/{run}/{grid}/w_tracks.pq"
+        trackPath = f"{outPath}/{run}/{grid}/combined_w_cond_segmented_tracks.pq"
         tracks = pd.read_parquet(trackPath)
 
         savemaskPath = f"{outPath}/{run}/{grid}/pcp_masks/"
@@ -70,7 +70,7 @@ for run in runs:
 
             latbounds = outbounds.loc[run].values
 
-            savedfPath = f"{outPath}/{run}/{grid}/pcp_seg.pq"
+            savedfPath = f"{outPath}/{run}/{grid}/combined_w_cond_pcp_segmented_tracks.pq"
 
             ds = client.map(
                 get_rams_output,
