@@ -8,7 +8,7 @@ import xarray as xr
 import tobac
 import glob
 
-client = dd.Client("tcp://129.82.20.217:8786")  # donwdraft
+client = dd.Client("updraft:8786")
 client.upload_file("shared_functions.py")
 
 from shared_functions import (
@@ -29,13 +29,13 @@ from shared_functions import (
 ver = "V1"  # version of INCUS simulation datasetls /m
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
-runs = ['AUS1.1-R-V1']  # which model runs to process
+runs = ["USA1.1-R-V1", "WPO1.1-R-V1"]  # which model runs to process
 grids = ["g3"]
 
 # parameters for segmentation
 params = {}
 params["method"] = "watershed"
-params["threshold"] = 1.0  # m/s mixing ratio
+params["threshold"] = 1.0  # m/s vertical velocity
 params["seed_3D_flag"] = "box"
 params["vertical_coord"] = "ztn"
 
@@ -45,10 +45,14 @@ params["vertical_coord"] = "ztn"
 outbounds = pd.read_pickle(f"/tempest/gleung/incustrack/bounds.pkl")
 
 # loop through each of the runs
-for run in runs:
-    dataPath = f"{modelPath}/{run}/G3/out_30s/"
+for grid in grids:
+    for run in runs:
+        print(grid,run)
+        dataPath = f"{modelPath}/{run}/G3/out_30s/"
 
-    for grid in grids:
+        latbounds = outbounds.loc[run].values
+
+    
         # list of all timesteps where lite files are found in relevant folder
         all_paths = [
             p.split("/")[-1][:-6]
@@ -62,7 +66,7 @@ for run in runs:
         savemaskPath = f"{outPath}/{run}/{grid}/w_masks/"
 
         if grid == "g3":
-            n = 32
+            n = 40
             batch_size = 1
             all_paths = enumerate(np.array_split(all_paths, n))
         elif grid == "g2":
@@ -75,10 +79,9 @@ for run in runs:
             all_paths = enumerate(np.array_split(all_paths, 1))
 
         for i, paths in all_paths:
-
             times = [pd.to_datetime(p.split("/")[-1][4:]) for p in paths]
 
-            latbounds = outbounds.loc[run].values
+            
 
             if (grid == "g3") or (grid == "g2"):
                 savedfPath = (
