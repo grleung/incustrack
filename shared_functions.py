@@ -15,15 +15,48 @@ p00 = 100000
 rgas = 287
 lv = 2.5e6
 
+
+nz = 232
+
+
+def read_header(dataPath, p, nz, var="__ztn01", varname="z"):
+    # fxn to read thermodynamic z from header file
+    header_file_name = (
+        f"{dataPath}/{p.split('/')[-1].split('.')[0][:-2]}head.txt"
+    )
+    with open(header_file_name) as f:
+        mylist = f.read().splitlines()
+    ix = mylist.index(var)
+    numlines = int(mylist[ix + 1])
+    coord = mylist[ix + 2 : ix + 2 + numlines]
+    coord = np.array([float(x) for x in coord])
+    return coord
+
+
+alt = read_header(
+            f"/monsoon/MODEL/LES_MODEL_DATA/V1/DRC1.1-R-V1/G3/out_30s/",
+            f"a-L-2016-12-30-110000-g1.h5",
+            nz=232,
+        )
+
+
+
+dz = 1/read_header(
+            f"/monsoon/MODEL/LES_MODEL_DATA/V1/DRC1.1-R-V1/G3/out_30s/",
+            f"a-L-2016-12-30-110000-g1.h5",
+            nz=232,
+            var="__dztn01",
+        )
+
 rams_dims_lite = {
     "phony_dim_0": "p",
-    "phony_dim_3": "ztn",
+    "phony_dim_3": "Z",
     "phony_dim_1": "Y",
     "phony_dim_2": "X",
 }
 
 rams_dims_anal = {
-    "phony_dim_2": "ztn",
+    "phony_dim_2": "Z",
     "phony_dim_0": "Y",
     "phony_dim_1": "X",
     "phony_dim_3": "p",  # patch
@@ -65,6 +98,9 @@ def get_rams_output(
     if coords:
         ds = assign_coords(ds)
 
+    if 'Z' in ds.dims:
+        ds = ds.assign_coords(ztn = ('Z',alt))
+
     if len(variables) == 1:
         ds = ds[variables[0]]
 
@@ -76,11 +112,12 @@ def rename_dims(ds, dims=rams_dims_lite):
 
 
 def assign_coords(ds):
-    if "ztn" in ds.dims:
+    
+    if "z" in ds.dims:
         c = {
             "X": ds.X,
             "Y": ds.Y,
-            "ztn": ds.ztn,
+            "Z": ds.Z,
             "lat": (["Y", "X"], np.array(ds.GLAT)),
             "lon": (["Y", "X"], np.array(ds.GLON)),
         }
@@ -172,22 +209,6 @@ def compute_pcp(ds):
     ds = ds["PCPT"]
     return ds
 
-
-nz = 232
-
-
-def read_header(dataPath, p, nz, var="__ztn01", varname="z"):
-    # fxn to read thermodynamic z from header file
-    header_file_name = (
-        f"{dataPath}/{p.split('/')[-1].split('.')[0][:-2]}head.txt"
-    )
-    with open(header_file_name) as f:
-        mylist = f.read().splitlines()
-    ix = mylist.index(var)
-    numlines = int(mylist[ix + 1])
-    coord = mylist[ix + 2 : ix + 2 + numlines]
-    coord = np.array([float(x) for x in coord])
-    return coord
 
 
 all_var = [

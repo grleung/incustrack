@@ -14,7 +14,7 @@ from scipy.ndimage import (
 import dask
 import dask.distributed as dd
 
-client = dd.Client("downdraft:8786")
+client = dd.Client("updraft:9999")
 client.upload_file("shared_functions.py")
 
 from shared_functions import (
@@ -30,6 +30,7 @@ from shared_functions import (
     compute_pcp,
     p00,
     rd,
+    alt,dz,
     cp,
 )
 
@@ -102,14 +103,16 @@ def get_masked_statistics(sub, grid, dxy, latbounds, dataPath, tobacPath):
             chunks="auto",
         )
 
-        cond_mask = cond_mask.assign(alt=(("ztn"), alt / 1000))
-        cond_mask = cond_mask.assign(dz=(("ztn"), dz))
+        #cond_mask = cond_mask.assign(alt=(("ztn"), alt / 1000))
+        #cond_mask = cond_mask.assign(dz=(("ztn"), dz))
+        cond_mask=cond_mask.rename_dims({'dim_0':'Z'})
+        cond_mask = cond_mask.assign_coords(dz = ('Z',dz))
 
         shape = (
             cond_mask.segmentation_mask / cond_mask.segmentation_mask
         ).fillna(1)
         cond_dz = cond_mask.dz * shape
-        cond_alt = cond_mask.alt * shape
+        cond_alt = cond_mask.ztn * shape
 
         cmf_mask = cond_mask.dz * dxy * dxy * (shape.where(ds.WP > 0))
         cmf = (
@@ -120,7 +123,7 @@ def get_masked_statistics(sub, grid, dxy, latbounds, dataPath, tobacPath):
         pcp = ds.PCPT
 
         sub["CTH"] = labeled_comprehension(
-            cond_alt,
+            cond_alt/1000,
             cond_mask.segmentation_mask,
             fts,
             np.nanmax,
@@ -129,7 +132,7 @@ def get_masked_statistics(sub, grid, dxy, latbounds, dataPath, tobacPath):
         )
 
         sub["CBH"] = labeled_comprehension(
-            cond_alt,
+            cond_alt/1000,
             cond_mask.segmentation_mask,
             fts,
             np.nanmin,
@@ -157,13 +160,13 @@ def get_masked_statistics(sub, grid, dxy, latbounds, dataPath, tobacPath):
         print("cloud stats")
 
         sub["updraft_topalt"] = maximum(
-            cond_alt,
+            cond_alt/1000,
             w_mask.segmentation_mask,
             fts,
         )
 
         sub["updraft_botalt"] = minimum(
-            cond_alt,
+            cond_alt/1000,
             w_mask.segmentation_mask,
             fts,
         )
@@ -290,12 +293,14 @@ def get_masked_statistics(sub, grid, dxy, latbounds, dataPath, tobacPath):
         sub.loc[sub[sub.cmf_max.isnull()].index, "cmfmax_alt"] = np.nan
         sub["wmax_alt"] = alt[pd.DataFrame(sub.wmax_loc.to_list())[0]] / 1000
 
+        print('done!')
+
         return sub
     else:
         print(sub)
 
 
-runs = ["AUS1.1-R-V1", "WPO1.1-R-V1"]
+runs = ['DRC1.1-R-V1']  
 grids = ["g3"]
 
 for grid in grids:
@@ -307,7 +312,7 @@ for grid in grids:
         dxy = get_xy_spacing(grid)
 
         dataPath = f"/monsoon/MODEL/LES_MODEL_DATA/V1/{run}/G3/out_30s/"
-        tobacPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/V1/{run}/{grid}"
+        tobacPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/V1-temp/{run}/{grid}"
 
         # need to take feature numbering from tracks parquet file
         tracks = pd.read_parquet(f"{tobacPath}/w_tracks.pq")
@@ -325,65 +330,29 @@ for grid in grids:
         out = out[[c for c in out.columns if not c.endswith("_drop")]]
         out["pcp_ncells"] = out["ncells"].copy()
 
-        alt = read_header(
-            dataPath,
-            f"a-L-{out['time'].iloc[0].strftime('%Y-%m-%d-%H%M%S')}-g3.h5",
-            nz=232,
-        )
 
-        dz = 1 / read_header(
-            dataPath,
-            f"a-L-{out['time'].iloc[0].strftime('%Y-%m-%d-%H%M%S')}-g3.h5",
-            nz=232,
-            var="__dztn01",
-        )
-
-        if grid == "g3":
-            for i, frames in enumerate(
-                np.array_split(sorted(out.frame.unique()), 11)
-            ):
-                if not os.path.exists(
-                    f"{tobacPath}/qc_feature_statistics_{str(i).zfill(2)}.pq"
+        for i, frames in enumerate(
+            np.array_split(sorted(out.frame.unique()), 11)
+        ):
+            if not os.path.exists(
+                f"{tobacPath}/qc_feature_statistics_{str(i).zfill(2)}.pq"
                 ):
-                    print(i, frames)
 
-                    x = client.map(
-                        get_masked_statistics,
-                        [out[out.frame == frame] for frame in frames],
-                        grid=grid,
-                        dxy=get_xy_spacing(grid),
-                        latbounds=latbounds,
-                        dataPath=dataPath,
-                        tobacPath=tobacPath,
-                    )
-                    x = client.gather(x)
-
-                    x = pd.concat(x)
-
-                    x.to_parquet(
-                        f"{tobacPath}/qc_feature_statistics_{str(i).zfill(2)}.pq"
-                    )
-                    print("saved", i)
-
-        else:
-            if (
-                True
-            ):  # not os.path.exists(f"{tobacPath}/qc_feature_statistics.pq"):
+                        
                 x = client.map(
                     get_masked_statistics,
-                    [
-                        out[out.frame == frame]
-                        for frame in sorted(out.frame.unique())
-                    ],
+                    [out[out.frame == frame] for frame in frames],
                     grid=grid,
                     dxy=get_xy_spacing(grid),
                     latbounds=latbounds,
                     dataPath=dataPath,
                     tobacPath=tobacPath,
-                    batch_size=1,
                 )
                 x = client.gather(x)
 
-                out = pd.concat(x)
+                x = pd.concat(x)
 
-                out.to_parquet(f"{tobacPath}/qc_feature_statistics.pq")
+                x.to_parquet(
+                    f"{tobacPath}/qc_feature_statistics_{str(i).zfill(2)}.pq"
+                )
+
