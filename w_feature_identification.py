@@ -16,24 +16,30 @@
 # Import some shared libraries
 import os
 import dask.distributed as dd
-import dask
+from dask_jobqueue import SLURMCluster
 import numpy as np
 import pandas as pd
 import xarray as xr
 import tobac
 import glob
 
-# change this address depending on your scheduler address
-client = dd.Client("tcp://129.82.20.217:8786")  # bee on downdraft
-client.upload_file("shared_functions.py")
+# spin up SLURM cluster
+cluster = SLURMCluster(cores=90,
+                       memory='600GB',
+                       account='incus',
+                       walltime='08:00:00',
+                       scheduler_options={'dashboard_address':":10101"},
+                       job_extra_directives=['--partition=all',
+                                             '--job-name=tobac-feature-detection'])
+cluster.scale(jobs=2)
 
+# change this address depending on your scheduler address
+client = dd.Client(cluster)
+client.upload_file("shared_functions.py")
 from shared_functions import (
     get_rams_output,
     get_xy_spacing,
-    subset_data,
     combine_tobac_list,
-    rams_dims_lite,
-    all_var,
     save_files,
 )
 
@@ -42,8 +48,12 @@ ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
 
-runs = ["AUS1.1-R-V1"]  # which model runs to process
-grids = ["g3"]
+runs = ['USA1.1-R-V1', 'AUS1.1-R-V1', 'DRC1.1-R-V1', 
+        'BRA2.1-R-V1', 'ARG1.1-R-V1', 'SIO1.1-R-V1',
+        'USA3.1-R-V1', 'WPO1.1-R-V1', 'PHI2.1-R-V1', 
+        'ARG1.2-R-V1', 'WPO1.1-RPR-V1', 'PHI1.1-R-V1', 
+        'SAU1.1-R-V1', 'BRA1.1-R-V1', 'DRC1.1-RCR-V1'] # which model runs to process
+grids = ["g2"]
 
 # separately I created a pkl file that contains the min/max lat/lon for each of the simulations
 # having this as separate dataframe saves on some computational cost from re-calculating this
@@ -73,6 +83,8 @@ for run in runs:
         for p in sorted(glob.glob(f"{dataPath}/a-L-*-g3.h5"))
     ]
 
+    print(len(all_paths))
+
     latbounds = outbounds.loc[run].values
 
     for grid in grids:
@@ -92,63 +104,62 @@ for run in runs:
             else:
                 savedfPath = f"{outPath}/{run}/{grid}/w_features.pq"
 
-            # batch size is how may batches to submit the tasks in the list [paths] to scheduler
-            if grid == "g3":
-                batch_size = 2
-            else:
-                batch_size = 20
+            if not os.path.exists(savedfPath):
 
-            dxy = get_xy_spacing(grid)
+                # batch size is how may batches to submit the tasks in the list [paths] to scheduler
+                if grid == "g3":
+                    batch_size = 1
+                else:
+                    batch_size = 20
 
-            # prep data for feeding to tobac
-            ds = client.map(
-                get_rams_output,
-                [f"{dataPath}/{p}-{grid}.h5" for p in paths],
-                variables=["WP"],
-                latbounds=latbounds,
-                latlon=True,
-                coords=True,
-                batch_size=batch_size,
-            )
+                dxy = get_xy_spacing(grid)
 
-            ds = client.map(
-                xr.DataArray.expand_dims,
-                ds,
-                [
-                    {"time": [pd.to_datetime(p.split("/")[-1][4:])]}
-                    for p in paths
-                ],
-                batch_size=batch_size,
-            )
+                # prep data for feeding to tobac
+                ds = client.map(
+                    get_rams_output,
+                    [f"{dataPath}/{p}-{grid}.h5" for p in paths],
+                    variables=["WP"],
+                    latbounds=latbounds,
+                    latlon=True,
+                    coords=True,
+                    batch_size=batch_size,
+                )
 
-            ds = client.map(
-                xr.DataArray.to_iris,
-                ds,
-                batch_size=batch_size,
-            )
+                ds = client.map(
+                    xr.DataArray.expand_dims,
+                    ds,
+                    [
+                        {"time": [pd.to_datetime(p.split("/")[-1][4:])]}
+                        for p in paths
+                    ],
+                    batch_size=batch_size,
+                )
 
-            # actual tobac run
-            feats = client.map(
-                tobac.feature_detection_multithreshold,
-                ds,
-                dxy=dxy,
-                vertical_coord="ztn",
-                **params,
-                batch_size=batch_size,
-            )
+                # actual tobac run
+                feats = client.map(
+                    tobac.feature_detection_multithreshold,
+                    ds,
+                    dxy=dxy,
+                    vertical_coord="ztn",
+                    **params,
+                    batch_size=batch_size,
+                )
 
-            # take all the features from tobac run
-            all_features = client.gather(feats)
+                # take all the features from tobac run
+                all_features = client.gather(feats)
 
-            # once loop is finished, concatenate all the figures
-            # then save it to a parquet file
-            all_features = combine_tobac_list(all_features)
+                # once loop is finished, concatenate all the figures
+                # then save it to a parquet file
+                all_features = combine_tobac_list(all_features)
 
-            # just make sure all directories exist
-            if not os.path.isdir(f"{outPath}/{run}"):
-                os.mkdir(f"{outPath}/{run}")
+                # just make sure all directories exist
+                if not os.path.isdir(f"{outPath}/{run}"):
+                    os.mkdir(f"{outPath}/{run}")
 
-            if not os.path.isdir(f"{outPath}/{run}/{grid}"):
-                os.mkdir(f"{outPath}/{run}/{grid}")
+                if not os.path.isdir(f"{outPath}/{run}/{grid}"):
+                    os.mkdir(f"{outPath}/{run}/{grid}")
 
-            save_files(all_features, savedfPath)
+                save_files(all_features, savedfPath)
+
+cluster.close()
+client.close()

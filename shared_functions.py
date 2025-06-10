@@ -66,13 +66,29 @@ rams_dims_anal = {
 
 
 def get_rams_output(
-    path,
-    variables,
-    latbounds=None,
-    dims=rams_dims_lite,
-    latlon=True,
-    coords=True,
-):
+    path: str,
+    variables: [str],
+    latbounds: bool=None,
+    dims: dict[str]=rams_dims_lite,
+    latlon:bool=True,
+    coords:bool=True,
+) -> xr.Dataset:
+    """
+    Read in RAMS output data and create xarray dataset
+
+    Arguments:
+        path -- full path to file
+        variables -- list of RAMS variable names (see RAMS documentation)
+
+    Keyword Arguments:
+        latbounds -- list of  (default: {None})
+        dims -- names of dimensions (default: {rams_dims_lite})
+        latlon -- should the data be subset for given lat/lon bounds in latbounds? (default: {True})
+        coords -- should coordinates be assigned? (default: {True})
+
+    Returns:
+        _description_
+    """ 
     time = pd.to_datetime(path.split("/")[-1][4:-6])
     grid = path.split("/")[-1][-5:-3]
 
@@ -139,23 +155,6 @@ def get_xy_spacing(grid):
         return 400
     elif grid == "g3":
         return 100
-
-
-def subset_data_dep(ds, latbounds):
-    # takes an xarray dataset ds from RAMS output and selects only
-    # the values within the defined lat/lon boundaries
-    ds = (
-        ds.where(
-            (ds.GLAT >= latbounds[0])
-            & (ds.GLAT <= latbounds[1])
-            & (ds.GLON >= latbounds[2])
-            & (ds.GLON <= latbounds[3]),
-        )
-        .dropna(dim="X", how="all")
-        .dropna(dim="Y", how="all")
-    )
-
-    return ds
 
 def subset_data(ds, latbounds):
     # takes an xarray dataset ds from RAMS output and selects only
