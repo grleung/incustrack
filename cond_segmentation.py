@@ -8,7 +8,7 @@ import pandas as pd
 import xarray as xr
 import tobac
 import glob
-#from dask_memusage import install
+from dask_memusage import install
 
 # spin up SLURM cluster
 cluster = SLURMCluster(
