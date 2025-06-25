@@ -13,17 +13,17 @@ import glob
 # spin up SLURM cluster
 cluster = SLURMCluster(
     cores=4,
-    processes=5,
-    memory="520GB",
+    processes=4,
+    memory="950GB",
     account="incus",
     walltime="48:00:00",
     scheduler_options={"dashboard_address": f":{sys.argv[1]}"},
     job_extra_directives=["--partition=all", "--job-name=tobac-cond-segmentation"],
 )
 client = Client(cluster)
-cluster.scale(jobs=2)
+cluster.scale(jobs=3)
 
-#install(cluster.scheduler, "/home/gleung/memusage-condseg.csv")
+install(cluster.scheduler, "/home/gleung/memusage-condseg-new.csv")
 
 client.upload_file("shared_functions.py")
 
@@ -59,12 +59,19 @@ def dask_segmentation(path, run, grid, outPath, params):
 
     time = pd.to_datetime(path.split("/")[-1][4:])
 
+    if grid == 'g3':
+        subset = False
+        subsetxy = False
+    else:
+        subset = True
+        subsetxy = True
+
     ds = get_rams_output(
         f"{modelPath}/{run}/G3/out_30s/{path}-{grid}.h5",
         variables=["RCP", "RSP", "RPP", "PI", "THETA", "RV"],
         bounds=xybounds,
-        subset=False,
-        subsetxy=False,
+        subset=True,
+        subsetxy=True,
         coords=True,
     ) 
     
