@@ -25,8 +25,23 @@ from shared_functions import get_xy_spacing, save_files
 ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
-runs = ["AUS1.1-R-V1"]  # which model runs to process
-
+runs = [
+    "ARG1.1-R-V1",
+    "ARG1.2-R-V1",
+    "AUS1.1-R-V1",
+    "BRA1.1-R-V1",
+    "BRA2.1-R-V1",
+    "DRC1.1-R-V1",
+    "DRC1.1-RCR-V1",
+    "PHI1.1-R-V1",
+    "PHI2.1-R-V1",
+    "SAU1.1-R-V1",
+    "SIO1.1-R-V1",
+    "USA1.1-R-V1",
+    "USA3.1-R-V1",
+    "WPO1.1-R-V1",
+    "WPO1.1-RPR-V1",
+]  # which model runs to process
 # separately I created a pkl file that contains the number of x,y points for each of the simulations
 # having this as separate dataframe saves on some computational cost from re-calculating this
 # in every script
@@ -39,7 +54,7 @@ params = {}
 params["extrapolate"] = 0
 params["order"] = 1
 params["memory"] = 0
-params["time_cell_min"] = 30  # in seconds
+params["time_cell_min"] = 2 * 60  # in seconds
 params["method_linking"] = "predict"
 params["adaptive_step"] = 0.75
 params["adaptive_stop"] = 1.0
@@ -48,79 +63,78 @@ params["adaptive_stop"] = 1.0
 for run in runs:
     print(run)
     dataPath = f"{modelPath}/{run}/G3/out_30s/"
-
-    for grid, dmax in zip(["g1", "g2",'g3'], [12800, 2800, 1700]):  # , "g3"],
+    grid = "g3"
+    for grid, dmax in zip(
+        ["g1", "g2", "g3"], [4800, 2000, 800]
+    ):  # based on 0.5th percentile of nearest neighbor distance
         print(grid)
+
         featPath = f"{outPath}/{run}/{grid}/w_features.pq"
         savePath = f"{outPath}/{run}/{grid}/w_tracks.pq"
 
-        # assign dxy (horizontal grid spacing) based on grid
-        dxy = get_xy_spacing(grid)
+        if (os.path.exists(featPath)) and (not os.path.exists(savePath)):
 
-        # the d_max comes from the mean 25th percentile nearest neighbor distance (see Bee's ppt documenting this
-        # on SharePoint under INCUS_LES_Tracking_ScienceDatabase)
-        # these values are different per grid, but the same for all domains
-        params["d_max"] = dmax
+            # assign dxy (horizontal grid spacing) based on grid
+            dxy = get_xy_spacing(grid)
 
-        # check if there is already a pickle file for w tracks so we don't re-do this
-        # and check to make sure pickle file with features already exists
-        # if (not os.path.exists(savePath)) & (os.path.exists(featPath)):
-        if True:
-            features = pd.read_parquet(featPath)
+            # the d_max comes from the mean 25th percentile nearest neighbor distance (see Bee's ppt documenting this
+            # on SharePoint under INCUS_LES_Tracking_ScienceDatabase)
+            # these values are different per grid, but the same for all domains
+            params["d_max"] = dmax
 
-            # Perform linking and save results:
-            tracks = tobac.linking_trackpy(
-                features,
-                None,
-                dt=30,  # time in seconds separating each frame
-                dxy=dxy,
-                vertical_coord="ztn",
-                **params,
-            )
+            # check if there is already a pickle file for w tracks so we don't re-do this
+            # and check to make sure pickle file with features already exists
+            # if (not os.path.exists(savePath)) & (os.path.exists(featPath)):
+            if True:
+                features = pd.read_parquet(featPath)
 
-            # remove any features that don't belong to a track (in tobac these are labelled -1)
-            out_tracks = tracks[tracks.cell != -1]
-
-            # first remove tracks that last less than 2 minutes
-            out_tracks = out_tracks[
-                out_tracks.groupby("cell")["time_cell"].transform("max")
-                > dt.timedelta(minutes=2)
-            ]
-
-            # second filter out cells near the edges of the nested grid
-            nx = outx.loc[run, grid]
-            ny = outy.loc[run, grid]
-
-            # define how near to the boundary features are allowed to be
-            # right now, we delete any feature that is within 1600m of the boundaries of the g3 lat/lon bounding box
-            # that is 1 pt for g1, 4 pts for g2, 16 pts for g3
-            # this is so that we exclude the sponge zone for g3 (which is 8 points)
-            min_h1, max_h1 = 1600 / dxy, ny - 1600 / dxy
-            min_h2, max_h2 = 1600 / dxy, nx - 1600 / dxy
-
-            # make sure lat lon are float
-            out_tracks["lat"] = out_tracks["lat"].astype("float")
-            out_tracks["lon"] = out_tracks["lon"].astype("float")
-
-            # select only cells where the cell is never outside the max/min horizontal locations
-            cells = out_tracks[["cell", "hdim_1", "hdim_2"]].groupby("cell")
-
-            out_tracks = out_tracks[
-                (
-                    (cells.hdim_1.transform("min") > min_h1)
-                    & (cells.hdim_2.transform("min") > min_h2)
+                # Perform linking and save results:
+                tracks = tobac.linking_trackpy(
+                    features,
+                    None,
+                    dt=30,  # time in seconds separating each frame
+                    dxy=dxy,
+                    vertical_coord="ztn",
+                    **params,
                 )
-                & (
-                    (cells.hdim_1.transform("max") < max_h1)
-                    & (cells.hdim_2.transform("max") < max_h2)
-                )
-            ]
 
-            # just make sure all directories exist
-            if not os.path.isdir(f"{outPath}/{run}"):
-                os.mkdir(f"{outPath}/{run}")
+                # remove any features that don't belong to a track or are less than 2 mins long (in tobac these are labelled -1)
+                out_tracks = tracks[tracks.cell > 0]
 
-            if not os.path.isdir(f"{outPath}/{run}/{grid}"):
-                os.mkdir(f"{outPath}/{run}/{grid}")
+                # second filter out cells near the edges of the nested grid
+                nx = outx.loc[run, grid]
+                ny = outy.loc[run, grid]
 
-            save_files(out_tracks, savePath)
+                # define how near to the boundary features are allowed to be
+                # right now, we delete any feature that is within 1600m of the boundaries of the g3 lat/lon bounding box
+                # that is 1 pt for g1, 4 pts for g2, 16 pts for g3
+                # this is so that we exclude the sponge zone for g3 (which is 8 points)
+                min_h1, max_h1 = 1600 / dxy, ny - 1600 / dxy
+                min_h2, max_h2 = 1600 / dxy, nx - 1600 / dxy
+
+                # make sure lat lon are float
+                out_tracks["lat"] = out_tracks["lat"].astype("float")
+                out_tracks["lon"] = out_tracks["lon"].astype("float")
+
+                # select only cells where the cell is never outside the max/min horizontal locations
+                cells = out_tracks[["cell", "hdim_1", "hdim_2"]].groupby("cell")
+
+                out_tracks = out_tracks[
+                    (
+                        (cells.hdim_1.transform("min") > min_h1)
+                        & (cells.hdim_2.transform("min") > min_h2)
+                    )
+                    & (
+                        (cells.hdim_1.transform("max") < max_h1)
+                        & (cells.hdim_2.transform("max") < max_h2)
+                    )
+                ]
+
+                # just make sure all directories exist
+                if not os.path.isdir(f"{outPath}/{run}"):
+                    os.mkdir(f"{outPath}/{run}")
+
+                if not os.path.isdir(f"{outPath}/{run}/{grid}"):
+                    os.mkdir(f"{outPath}/{run}/{grid}")
+
+                save_files(out_tracks, savePath)

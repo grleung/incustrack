@@ -1,358 +1,210 @@
+# For questions, contact Bee (gabrielle.leung@colostate.edu)
+
+# Import some shared libraries
 import os
-import xarray as xr
+import dask.distributed as dd
+from dask_jobqueue import SLURMCluster
 import numpy as np
 import pandas as pd
-import datetime as dt
-from scipy.ndimage import (
-    labeled_comprehension,
-    maximum_position,
-    sum_labels,
-    maximum,
-    mean,
-    minimum,
+import xarray as xr
+import tobac
+import sys
+from tobac.utils import get_statistics_from_mask
+from dask_memusage import install
+
+# spin up SLURM cluster
+cluster = SLURMCluster(
+    cores=30,
+    processes=15,
+    memory="500GB",
+    account="incus",
+    walltime="56:00:00",
+    scheduler_options={"dashboard_address": f":{sys.argv[1]}"},
+    job_extra_directives=["--partition=all", "--job-name=tobac-statistics"],
 )
-import dask
-import dask.distributed as dd
 
-client = dd.Client("updraft:9999")
+cluster.scale(jobs=5)
+
+# change this address depending on your scheduler address
+client = dd.Client(cluster)
+install(cluster.scheduler, "/home/gleung/memusage-stats-new.csv")
+
 client.upload_file("shared_functions.py")
-
 from shared_functions import (
     get_rams_output,
-    read_header,
     get_xy_spacing,
-    subset_data,
-    combine_tobac_list,
-    rams_dims_lite,
-    all_var,
     save_files,
-    compute_cond,
-    compute_pcp,
-    p00,
-    rd,
-    alt,dz,
-    cp,
+    compute_dens,
 )
 
+# Define the paths to INCUS data and where to save output
+ver = "V1"  # version of INCUS simulation dataset
+modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
+outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
 
-def get_footprint(arr):
-    return arr.max(axis=(0)).sum().compute()
+runs = [
+   # "ARG1.1-R-V1",
+   # "ARG1.2-R-V1",
+   # "AUS1.1-R-V1",
+   # "BRA1.1-R-V1",
+   # "BRA2.1-R-V1",
+   # "PHI1.1-R-V1",
+   # "USA1.1-R-V1",
+   # "WPO1.1-R-V1",
+   # "WPO1.1-RPR-V1",
+   # "SIO1.1-R-V1",
+   # "USA3.1-R-V1",
+   # "PHI2.1-R-V1",
+    #"DRC1.1-R-V1",
+    "DRC1.1-RCR-V1",
+     "SAU1.1-R-V1",
 
+]
+grids = ["g2"]
 
-outbounds = pd.read_pickle(f"/tempest/gleung/incustrack/bounds.pkl")
+def get_statistics(path, run, grid):
+    from shared_functions import dz
 
+    dxy = get_xy_spacing(grid)
 
-def get_masked_statistics(sub, grid, dxy, latbounds, dataPath, tobacPath):
-    if len(sub) > 0:
-        fts = sub.feature.unique()
-        time = pd.to_datetime(sub.timestr.iloc[0])
+    time = pd.to_datetime(path[4:-3])
 
-        if grid == "g3":
-            latlon = False
-            coords = False
-        else:
-            latlon = True
-            coords = True
+    xybounds = pd.read_parquet("/tempest/gleung/incustrack/xybounds.pq").loc[run,grid]
+    ds = get_rams_output(
+        f"{modelPath}/{run}/G3/out_30s/{path[:-3]}-{grid}.h5",
+        variables=["WP", "RV", "THETA", "PI"],
+        bounds=xybounds,
+        subset=True,
+        subsetxy=True,
+        coords=True,
+    ) 
 
-        ds = get_rams_output(
-            f"{dataPath}/a-L-{time.strftime('%Y-%m-%d-%H%M%S')}-{grid}.h5",
-            variables=[
-                "PCPRR",
-                "PCPRP",
-                "PCPRS",
-                "PCPRA",
-                "PCPRG",
-                "PCPRH",
-                "PCPRD",
-                "WP",
-                "RCP",
-                "RSP",
-                "RPP",
-                "PI",
-                "THETA",
-                "RV",
-            ],
-            latbounds=latbounds,
-            latlon=latlon,
-            coords=coords,
-        )
+    dens = compute_dens(ds)
+    w = ds.WP
 
-        temp = compute_cond(ds, return_dens=True)
+    cond_mask = xr.open_dataarray(
+        f"{outPath}/{run}/{grid}/cond_masks/{path}", 
+        engine="h5netcdf",
+        chunks="auto",
+    ).chunk(ds.chunks)
+    w_mask = xr.open_dataarray(
+        f"{outPath}/{run}/{grid}/w_masks/{path}",
+        engine="h5netcdf",
+        chunks="auto",
+    ).chunk(ds.chunks)
 
-        ds = ds.assign(
-            COND=temp["COND"], DENS=temp["DENS"], PCPT=compute_pcp(ds)
-        )
+    features = pd.read_parquet(
+        f"{outPath}/{run}/{grid}/combined_w_cond_segmented_tracks.pq"
+    )
+    features = features[features.time == time].reset_index(drop=True)
 
-        ds = ds[["COND", "PCPT", "WP", "DENS"]]
+    alt = xr.ones_like(cond_mask) * cond_mask.ztn
+    cond_mask = cond_mask.assign_coords(dz=("Z", dz))
+    dz = xr.ones_like(cond_mask) * cond_mask.dz
 
-        cond_mask = xr.open_dataset(
-            f"{tobacPath}/cond_masks/a-L-{time.strftime('%Y-%m-%d-%H%M%S')}.h5",
-            engine="h5netcdf",
-            chunks="auto",
-        )
+    statistics = {}
+    statistics["cloud_top_height"] = np.max
+    statistics["cloud_base_height"] = np.min
+    cout = get_statistics_from_mask(
+        features, cond_mask, alt, statistic=statistics
+    )
 
-        w_mask = xr.open_dataset(
-            f"{tobacPath}/w_masks/a-L-{time.strftime('%Y-%m-%d-%H%M%S')}.h5",
-            engine="h5netcdf",
-            chunks="auto",
-        )
+    statistics = {}
+    statistics["updraft_top_height"] = np.max
+    statistics["updraft_base_height"] = np.min
+    wout = get_statistics_from_mask(features, w_mask, alt, statistic=statistics)
 
-        pcp_mask = xr.open_dataset(
-            f"{tobacPath}/pcp_masks/a-L-{time.strftime('%Y-%m-%d-%H%M%S')}.h5",
-            engine="h5netcdf",
-            chunks="auto",
-        )
+    out = pd.merge(left=cout, right=wout)
 
-        #cond_mask = cond_mask.assign(alt=(("ztn"), alt / 1000))
-        #cond_mask = cond_mask.assign(dz=(("ztn"), dz))
-        cond_mask=cond_mask.rename_dims({'dim_0':'Z'})
-        cond_mask = cond_mask.assign_coords(dz = ('Z',dz))
+    statistics = {}
+    statistics["condensate_volume"] = np.sum
+    vout = get_statistics_from_mask(
+        features, cond_mask, dz, statistic=statistics
+    )
+    vout["condensate_volume"] = vout["condensate_volume"] * dxy * dxy
 
-        shape = (
-            cond_mask.segmentation_mask / cond_mask.segmentation_mask
-        ).fillna(1)
-        cond_dz = cond_mask.dz * shape
-        cond_alt = cond_mask.ztn * shape
+    out = pd.merge(left=out, right=vout)
 
-        cmf_mask = cond_mask.dz * dxy * dxy * (shape.where(ds.WP > 0))
-        cmf = (
-            cmf_mask * ds.DENS * ds.WP
-        )  # cond_mask.dz * dxy * dxy * ds.DENS * ((ds.WP).where(ds.WP > 0))
+    statistics = {}
+    statistics["updraft_volume"] = np.sum
+    vout = get_statistics_from_mask(features, w_mask, dz, statistic=statistics)
+    vout["updraft_volume"] = vout["updraft_volume"] * dxy * dxy
 
-        wp = ds.WP
-        pcp = ds.PCPT
+    out = pd.merge(left=out, right=vout)
 
-        sub["CTH"] = labeled_comprehension(
-            cond_alt/1000,
-            cond_mask.segmentation_mask,
-            fts,
-            np.nanmax,
-            np.float64,
-            np.nan,
-        )
+    statistics = {}
+    statistics["updraft_max"] = np.max
+    statistics["updraft_mean"] = np.mean
+    statistics["updraft_percentiles"] = (np.percentile, {"q": [50, 90, 95, 99]})
+    wout = get_statistics_from_mask(features, w_mask, w, statistic=statistics)
 
-        sub["CBH"] = labeled_comprehension(
-            cond_alt/1000,
-            cond_mask.segmentation_mask,
-            fts,
-            np.nanmin,
-            np.float64,
-            np.nan,
-        )
+    out = pd.merge(left=out, right=wout)
 
-        sub["condensate_volume"] = (
-            sum_labels(
-                cond_dz,
-                cond_mask.segmentation_mask,
-                fts,
-            )
-            * dxy
-            * dxy
-            / (1000 * 1000 * 1000)
-        )
+    cmf_mask = cond_mask.where(w >= 1)
 
-        sub["condensate_count"] = sum_labels(
-            shape,
-            cond_mask.segmentation_mask,
-            fts,
-        )
+    statistics = {}
+    statistics["intcmf_max"] = np.max
+    statistics["intcmf_mean"] = np.mean
+    statistics["intcmf_total"] = np.sum
+    statistics["intcmf_percentiles"] = (np.percentile, {"q": [50, 90, 95, 99]})
+    cmfout = get_statistics_from_mask(
+        features, cmf_mask, dens * w * dz * dxy * dxy, statistic=statistics
+    )
 
-        print("cloud stats")
+    out = pd.merge(left=out, right=cmfout)
 
-        sub["updraft_topalt"] = maximum(
-            cond_alt/1000,
-            w_mask.segmentation_mask,
-            fts,
-        )
+    statistics = {}
+    statistics["cmf_volume"] = np.sum
+    cmfout = get_statistics_from_mask(
+        features, cmf_mask, dz, statistic=statistics
+    )
+    out = pd.merge(left=out, right=cmfout)
+    out["cmf_volume"] = out.cmf_volume * dxy * dxy
 
-        sub["updraft_botalt"] = minimum(
-            cond_alt/1000,
-            w_mask.segmentation_mask,
-            fts,
-        )
+    statistics = {}
+    statistics["cmf_max"] = np.max
+    statistics["cmf_mean"] = np.mean
+    statistics["cmf_percentiles"] = (np.percentile, {"q": [50, 90, 95, 99]})
 
-        sub["updraft_volume"] = (
-            sum_labels(
-                cond_dz,
-                w_mask.segmentation_mask,
-                fts,
-            )
-            * dxy
-            * dxy
-            / (1000 * 1000 * 1000)
-        )
+    cmfout = get_statistics_from_mask(
+        features, cmf_mask, dens * w, statistic=statistics
+    )
 
-        sub["updraft_count"] = sum_labels(
-            shape,
-            w_mask.segmentation_mask,
-            fts,
-        )
+    out = pd.merge(left=out, right=cmfout)
 
-        print("updraft stats")
+    del w_mask
+    del cond_mask
+    del ds
 
-        sub["pcp_area"] = (
-            sum_labels(
-                (pcp_mask.segmentation_mask / pcp_mask.segmentation_mask),
-                pcp_mask.segmentation_mask,
-                fts,
-            )
-            * dxy
-            * dxy
-            / (1000 * 1000)
-        )
-
-        print("pcp stats")
-
-        sub["cmf_volume"] = labeled_comprehension(
-            cmf_mask,
-            cond_mask.segmentation_mask,
-            fts,
-            np.nansum,
-            np.float64,
-            np.nan,
-        )
-
-        sub["dens_weighted_w_mean"] = labeled_comprehension(
-            ds.WP * ds.DENS,
-            cond_mask.segmentation_mask,
-            fts,
-            np.nanmean,
-            np.float64,
-            np.nan,
-        )
-
-        sub["cmf_total"] = labeled_comprehension(
-            cmf, cond_mask.segmentation_mask, fts, np.nansum, np.float64, np.nan
-        )
-
-        sub["cmf_mean"] = labeled_comprehension(
-            cmf,
-            cond_mask.segmentation_mask,
-            fts,
-            np.nanmean,
-            np.float64,
-            np.nan,
-        )
-
-        sub["cmf_max"] = labeled_comprehension(
-            cmf,
-            cond_mask.segmentation_mask,
-            fts,
-            np.nanmax,
-            np.float64,
-            np.nan,
-        )
-
-        sub["cmfmax_loc"] = maximum_position(
-            cmf.fillna(0), cond_mask.segmentation_mask, fts
-        )
-
-        print("cmf stats")
-
-        sub["w_mean"] = mean(
-            wp,
-            w_mask.segmentation_mask,
-            fts,
-        )
-
-        sub["w_max"] = maximum(
-            wp,
-            w_mask.segmentation_mask,
-            fts,
-        )
-
-        sub["wmax_loc"] = maximum_position(wp, w_mask.segmentation_mask, fts)
-
-        print("w stats")
-
-        sub["pcp_mean"] = mean(
-            pcp,
-            pcp_mask.segmentation_mask,
-            fts,
-        )
-
-        sub["pcp_max"] = maximum(
-            pcp,
-            pcp_mask.segmentation_mask,
-            fts,
-        )
-
-        sub["pcp_total"] = sub.pcp_mean * sub.pcp_area
-
-        print("pcp2 stats")
-
-        """if grid=='g1':
-            sub['w_footprint'] =  [dxy * dxy *get_footprint((w_mask.segmentation_mask==ft).data)/1000**2 for ft in fts]
-            sub['condensate_count'] = [dxy * dxy * get_footprint((cond_mask.segmentation_mask==ft).data)/1000**2 for ft in fts]
-
-            print('footprint stats')
-        """
-        sub["cmfmax_alt"] = (
-            alt[pd.DataFrame(sub.cmfmax_loc.to_list())[0]] / 1000
-        )
-        sub.loc[sub[sub.cmf_max.isnull()].index, "cmfmax_alt"] = np.nan
-        sub["wmax_alt"] = alt[pd.DataFrame(sub.wmax_loc.to_list())[0]] / 1000
-
-        print('done!')
-
-        return sub
-    else:
-        print(sub)
+    return out
 
 
-runs = ['DRC1.1-R-V1']  
-grids = ["g3"]
-
-for grid in grids:
+for grid, batch_size in zip(grids, [5, 1]):
     for run in runs:
-        latbounds = outbounds.loc[run].values
-
         print(run, grid)
+        dataPath = f"/monsoon/MODEL/LES_MODEL_DATA/V1/{run}/{grid.capitalize()}/out_30s/"
+        tobacPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/V1/{run}/{grid}"
+        savePath = f"{tobacPath}/qc_tracks_statistics.pq"
 
-        dxy = get_xy_spacing(grid)
+        if os.path.exists(
+            f"{tobacPath}/combined_w_cond_segmented_tracks.pq") and (not os.path.exists(savePath)):
+            paths = sorted(os.listdir(f"{tobacPath}/cond_masks"))
 
-        dataPath = f"/monsoon/MODEL/LES_MODEL_DATA/V1/{run}/G3/out_30s/"
-        tobacPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/V1-temp/{run}/{grid}"
+            ds = client.map(
+                get_statistics,
+                paths,
+                run=run,
+                grid=grid,  
+                batch_size=batch_size
+            )
+            ds = client.gather(ds)
 
-        # need to take feature numbering from tracks parquet file
-        tracks = pd.read_parquet(f"{tobacPath}/w_tracks.pq")
-        pcp = pd.read_parquet(
-            f"{tobacPath}/combined_w_cond_pcp_segmented_tracks.pq"
-        )
+            ds = tobac.utils.combine_feature_dataframes(
+                ds,
+                renumber_features=False,
+                sort_features_by="frame",
+            )
+            save_files(ds, savePath)
 
-        out = pd.merge(
-            left=tracks,
-            right=pcp,
-            left_on=["cell", "frame"],
-            right_on=["cell", "frame"],
-            suffixes=[None, "_drop"],
-        )
-        out = out[[c for c in out.columns if not c.endswith("_drop")]]
-        out["pcp_ncells"] = out["ncells"].copy()
-
-
-        for i, frames in enumerate(
-            np.array_split(sorted(out.frame.unique()), 11)
-        ):
-            if not os.path.exists(
-                f"{tobacPath}/qc_feature_statistics_{str(i).zfill(2)}.pq"
-                ):
-
-                        
-                x = client.map(
-                    get_masked_statistics,
-                    [out[out.frame == frame] for frame in frames],
-                    grid=grid,
-                    dxy=get_xy_spacing(grid),
-                    latbounds=latbounds,
-                    dataPath=dataPath,
-                    tobacPath=tobacPath,
-                )
-                x = client.gather(x)
-
-                x = pd.concat(x)
-
-                x.to_parquet(
-                    f"{tobacPath}/qc_feature_statistics_{str(i).zfill(2)}.pq"
-                )
-
+client.close()
+cluster.close()

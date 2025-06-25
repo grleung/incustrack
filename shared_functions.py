@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
 import xarray as xr
-#from jug import TaskGenerator
+
+# from jug import TaskGenerator
 import tobac
 import dask
 import os
@@ -34,19 +35,18 @@ def read_header(dataPath, p, nz, var="__ztn01", varname="z"):
 
 
 alt = read_header(
-            f"/monsoon/MODEL/LES_MODEL_DATA/V1/DRC1.1-R-V1/G3/out_30s/",
-            f"a-L-2016-12-30-110000-g1.h5",
-            nz=232,
-        )
+    f"/monsoon/MODEL/LES_MODEL_DATA/V1/DRC1.1-R-V1/G3/out_30s/",
+    f"a-L-2016-12-30-110000-g1.h5",
+    nz=232,
+)
 
 
-
-dz = 1/read_header(
-            f"/monsoon/MODEL/LES_MODEL_DATA/V1/DRC1.1-R-V1/G3/out_30s/",
-            f"a-L-2016-12-30-110000-g1.h5",
-            nz=232,
-            var="__dztn01",
-        )
+dz = 1 / read_header(
+    f"/monsoon/MODEL/LES_MODEL_DATA/V1/DRC1.1-R-V1/G3/out_30s/",
+    f"a-L-2016-12-30-110000-g1.h5",
+    nz=232,
+    var="__dztn01",
+)
 
 rams_dims_lite = {
     "phony_dim_0": "p",
@@ -68,10 +68,11 @@ rams_dims_anal = {
 def get_rams_output(
     path: str,
     variables: [str],
-    latbounds: bool=None,
-    dims: dict[str]=rams_dims_lite,
-    latlon:bool=True,
-    coords:bool=True,
+    bounds: bool = None,
+    dims: dict[str] = rams_dims_lite,
+    subset: bool = True,
+    subsetxy: bool = True,
+    coords: bool = True,
 ) -> xr.Dataset:
     """
     Read in RAMS output data and create xarray dataset
@@ -81,18 +82,18 @@ def get_rams_output(
         variables -- list of RAMS variable names (see RAMS documentation)
 
     Keyword Arguments:
-        latbounds -- list of  (default: {None})
+        latbounds -- list of lat/lon bounding box coordinates (default: {None})
         dims -- names of dimensions (default: {rams_dims_lite})
-        latlon -- should the data be subset for given lat/lon bounds in latbounds? (default: {True})
+        subset -- should the data be subset for given  bounds? (default: {True})
+        subsetxy -- are bounds given as a list of xy points or latlon points? (default: {True})
         coords -- should coordinates be assigned? (default: {True})
 
     Returns:
-        _description_
-    """ 
-    time = pd.to_datetime(path.split("/")[-1][4:-6])
+        Read in RAMS data and optionally subset
+    """
     grid = path.split("/")[-1][-5:-3]
 
-    if latlon or coords:
+    if ((subset) and (not subsetxy)):
         drop_var = [v for v in all_var if v not in variables + ["GLAT", "GLON"]]
     else:
         drop_var = [v for v in all_var if v not in variables]
@@ -108,42 +109,42 @@ def get_rams_output(
     ds = rename_dims(ds, dims)
     ds = ds.unify_chunks()
 
-    if grid != "g3":
-        ds = subset_data(ds, latbounds)
+    if ((grid != "g3") & subset):
+        if subsetxy:    
+            ds = subset_data_xy(ds, bounds)
+        else:
+            ds = subset_data_latlon(ds, bounds)
 
     if coords:
         ds = assign_coords(ds)
 
-    if 'Z' in ds.dims:
-        ds = ds.assign_coords(ztn = ('Z',alt))
+    if "Z" in ds.dims:
+        ds = ds.assign_coords(ztn=("Z", alt))
 
     if len(variables) == 1:
         ds = ds[variables[0]]
 
     return ds
 
-
 def rename_dims(ds, dims=rams_dims_lite):
     return ds.rename_dims(dict([(d, dims.get(d)) for d in ds.dims]))
 
-
 def assign_coords(ds):
-    
     if "z" in ds.dims:
         c = {
             "X": ds.X,
             "Y": ds.Y,
-            "Z": ds.Z,
-            "lat": (["Y", "X"], np.array(ds.GLAT)),
-            "lon": (["Y", "X"], np.array(ds.GLON)),
-        }
+            "Z": ds.Z
+            }
     else:
         c = {
             "X": ds.X,
-            "Y": ds.Y,
-            "lat": (["Y", "X"], np.array(ds.GLAT)),
-            "lon": (["Y", "X"], np.array(ds.GLON)),
-        }
+            "Y": ds.Y,}
+        
+    if 'GLAT' in list(ds.keys()):
+        c['lat'] =  (["Y", "X"], np.array(ds.GLAT))
+        c["lon"] =  (["Y", "X"], np.array(ds.GLON))
+
     return ds.assign_coords(c)
 
 
@@ -156,20 +157,56 @@ def get_xy_spacing(grid):
     elif grid == "g3":
         return 100
 
-def subset_data(ds, latbounds):
+
+def subset_data_latlon(ds, latbounds):
     # takes an xarray dataset ds from RAMS output and selects only
     # the values within the defined lat/lon boundaries
-    masky = ds.Y.where((ds.GLAT>=latbounds[0]) & (ds.GLAT<=latbounds[1]) & (ds.GLON>=latbounds[2]) & (ds.GLON<=latbounds[3])).dropna(dim='X',how='all').dropna(dim='Y',how='all').values
-    maskx = ds.X.where((ds.GLAT>=latbounds[0]) & (ds.GLAT<=latbounds[1]) & (ds.GLON>=latbounds[2]) & (ds.GLON<=latbounds[3])).dropna(dim='X',how='all').dropna(dim='Y',how='all').values
+    masky = (
+        ds.Y.where(
+            (ds.GLAT >= latbounds.iloc[0])
+            & (ds.GLAT <= latbounds.iloc[1])
+            & (ds.GLON >= latbounds.iloc[2])
+            & (ds.GLON <= latbounds.iloc[3])
+        )
+        .dropna(dim="X", how="all")
+        .dropna(dim="Y", how="all")
+        .values
+    )
+    maskx = (
+        ds.X.where(
+            (ds.GLAT >= latbounds.iloc[0])
+            & (ds.GLAT <= latbounds.iloc[1])
+            & (ds.GLON >= latbounds.iloc[2])
+            & (ds.GLON <= latbounds.iloc[3])
+        )
+        .dropna(dim="X", how="all")
+        .dropna(dim="Y", how="all")
+        .values
+    )
 
-    ds = ds.sel(Y=slice(np.nanmin(masky).astype('int'),np.nanmax(masky).astype('int')+1),X=slice(np.nanmin(maskx).astype('int'),np.nanmax(maskx).astype('int')+1))
+    ds = ds.sel(
+        Y=slice(
+            np.nanmin(masky).astype("int"), np.nanmax(masky).astype("int") + 1
+        ),
+        X=slice(
+            np.nanmin(maskx).astype("int"), np.nanmax(maskx).astype("int") + 1
+        ),
+    )
     return ds
 
 
-def combine_tobac_list(features_list):
-    # takes a list of tobac output dataframes and combines them into one dataframe
-    return tobac.utils.combine_feature_dataframes(features_list)
-
+def subset_data_xy(ds, xybounds):
+    # takes an xarray dataset ds from RAMS output and selects only
+    # the values within the defined x/y gridpoint boundaries
+    ds = ds.sel(
+        Y=slice(
+            xybounds[0],xybounds[1]
+        ),
+        X=slice(
+            xybounds[2],xybounds[3]
+        ),
+    )
+    return ds
 
 def save_files(out, savePath):
     out["time"] = pd.to_datetime(out["timestr"])
@@ -177,7 +214,7 @@ def save_files(out, savePath):
     out.to_parquet(savePath, engine="pyarrow")
 
 
-def compute_cond(ds,return_dens=False):
+def compute_cond(ds, return_dens=False):
     ds = ds.assign(PRES=p00 * (ds.PI / cp) ** (cp / rd))
     ds = ds.assign(TEMP=ds.THETA * (ds.PI / cp))
     ds = ds.assign(DENS=ds.PRES / (rd * ds.TEMP * (1 + (0.61 * ds.RV))))
@@ -185,9 +222,16 @@ def compute_cond(ds,return_dens=False):
     ds = ds.assign(COND=(ds.RCP + ds.RSP + ds.RPP) * ds.DENS)
 
     if return_dens:
-        ds = ds[['COND','DENS']]
+        ds = ds[["COND", "DENS"]]
     else:
         ds = ds["COND"]
+    return ds
+
+def compute_dens(ds):
+    ds = ds.assign(PRES=p00 * (ds.PI / cp) ** (cp / rd))
+    ds = ds.assign(TEMP=ds.THETA * (ds.PI / cp))
+    ds = ds.assign(DENS=ds.PRES / (rd * ds.TEMP * (1 + (0.61 * ds.RV))))
+    ds = ds["DENS"]
     return ds
 
 
@@ -207,7 +251,6 @@ def compute_pcp(ds):
 
     ds = ds["PCPT"]
     return ds
-
 
 
 all_var = [
@@ -265,5 +308,5 @@ all_var = [
     "WP",
     "WP_ADVDIF",
     "WP_BUOY_COND",
-    'WP_BUOY_THETA'
+    "WP_BUOY_THETA",
 ]

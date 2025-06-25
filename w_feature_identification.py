@@ -4,13 +4,10 @@
 # inputs: list of model runs, RAMS model output
 # output: tobac output dataframe of features
 
-# This script is parallelized with dask distributed. To run from command line
-# run "dask scheduler &" then "dask workers tcp::/scheduler:port --nworkers NW --nthreads NT --memory-limit "MEM GiB"
-# I usually use NW = 30, NT = 1, MEM = 30 GiB on downdraft, but haven't really experimented with this.
-# then run "python w_feature_identification.py"
-# Make sure that the client below is the same as the client address of your scheduler.
-# Pretty sure this is the default and should work, but I may be wrong.
-
+# This script is parallelized with dask distributed from a SLURM Cluster. To run from command line
+# run "python w_feature_identification.py [SCHEDULER ADRESS] [LIST OF RUNS]"
+# e.g., "python w_feature_identification 10101 DRC1.1-R-V1 ARG1.1-R-V1"
+#
 # For questions, contact Bee (gabrielle.leung@colostate.edu)
 
 # Import some shared libraries
@@ -22,24 +19,26 @@ import pandas as pd
 import xarray as xr
 import tobac
 import glob
+import sys
 
 # spin up SLURM cluster
-cluster = SLURMCluster(cores=90,
-                       memory='600GB',
+cluster = SLURMCluster(cores=15,
+                       processes=15,
+                       memory='400GB',
                        account='incus',
-                       walltime='08:00:00',
-                       scheduler_options={'dashboard_address':":10101"},
+                       walltime='56:00:00',
+                       scheduler_options={'dashboard_address':f":{sys.argv[1]}"},
                        job_extra_directives=['--partition=all',
                                              '--job-name=tobac-feature-detection'])
-cluster.scale(jobs=2)
+cluster.scale(jobs=1)
 
 # change this address depending on your scheduler address
 client = dd.Client(cluster)
+
 client.upload_file("shared_functions.py")
 from shared_functions import (
     get_rams_output,
     get_xy_spacing,
-    combine_tobac_list,
     save_files,
 )
 
@@ -48,17 +47,14 @@ ver = "V1"  # version of INCUS simulation dataset
 modelPath = f"/monsoon/MODEL/LES_MODEL_DATA/{ver}/"
 outPath = f"/monsoon/MODEL/LES_MODEL_DATA/Tracking/{ver}/"
 
-runs = ['USA1.1-R-V1', 'AUS1.1-R-V1', 'DRC1.1-R-V1', 
-        'BRA2.1-R-V1', 'ARG1.1-R-V1', 'SIO1.1-R-V1',
-        'USA3.1-R-V1', 'WPO1.1-R-V1', 'PHI2.1-R-V1', 
-        'ARG1.2-R-V1', 'WPO1.1-RPR-V1', 'PHI1.1-R-V1', 
-        'SAU1.1-R-V1', 'BRA1.1-R-V1', 'DRC1.1-RCR-V1'] # which model runs to process
-grids = ["g2"]
+runs = sys.argv[2:]
+print(runs)
+grids = ["g3"]
 
 # separately I created a pkl file that contains the min/max lat/lon for each of the simulations
 # having this as separate dataframe saves on some computational cost from re-calculating this
 # in every script
-outbounds = pd.read_pickle(f"/tempest/gleung/incustrack/bounds.pkl")
+xybounds = pd.read_pickle(f"/tempest/gleung/incustrack/xybounds.pkl")
 
 # tobac feature identification parameters
 # see tobac documentation for more detailed description
@@ -85,14 +81,14 @@ for run in runs:
 
     print(len(all_paths))
 
-    latbounds = outbounds.loc[run].values
 
     for grid in grids:
+        bounds = xybounds.loc[run,grid]
 
         # For some of the g3 domains, I had some issues with too much data being loaded into memory at once,
         # so I split up feature detection into multiple subsets
         if grid == "g3":
-            n_split = 16
+            n_split = (len(all_paths)//12)
         else:
             n_split = 1
 
@@ -108,9 +104,9 @@ for run in runs:
 
                 # batch size is how may batches to submit the tasks in the list [paths] to scheduler
                 if grid == "g3":
-                    batch_size = 1
+                    batch_size = 4
                 else:
-                    batch_size = 20
+                    batch_size = 30
 
                 dxy = get_xy_spacing(grid)
 
@@ -119,10 +115,10 @@ for run in runs:
                     get_rams_output,
                     [f"{dataPath}/{p}-{grid}.h5" for p in paths],
                     variables=["WP"],
-                    latbounds=latbounds,
-                    latlon=True,
+                    bounds=bounds,
+                    subset=True,
+                    subsetxy=True,
                     coords=True,
-                    batch_size=batch_size,
                 )
 
                 ds = client.map(
@@ -132,7 +128,6 @@ for run in runs:
                         {"time": [pd.to_datetime(p.split("/")[-1][4:])]}
                         for p in paths
                     ],
-                    batch_size=batch_size,
                 )
 
                 # actual tobac run
@@ -150,7 +145,11 @@ for run in runs:
 
                 # once loop is finished, concatenate all the figures
                 # then save it to a parquet file
-                all_features = combine_tobac_list(all_features)
+                all_features = tobac.utils.combine_feature_dataframes(
+                    out,
+                    renumber_features=False,
+                    sort_features_by="frame",
+                )
 
                 # just make sure all directories exist
                 if not os.path.isdir(f"{outPath}/{run}"):
