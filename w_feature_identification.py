@@ -22,14 +22,18 @@ import glob
 import sys
 
 # spin up SLURM cluster
-cluster = SLURMCluster(cores=15,
-                       processes=15,
-                       memory='400GB',
-                       account='incus',
-                       walltime='56:00:00',
-                       scheduler_options={'dashboard_address':f":{sys.argv[1]}"},
-                       job_extra_directives=['--partition=all',
-                                             '--job-name=tobac-feature-detection'])
+cluster = SLURMCluster(
+    cores=15,
+    processes=15,
+    memory="400GB",
+    account="incus",
+    walltime="56:00:00",
+    scheduler_options={"dashboard_address": f":{sys.argv[1]}"},
+    job_extra_directives=[
+        "--partition=all",
+        "--job-name=tobac-feature-detection",
+    ],
+)
 cluster.scale(jobs=1)
 
 # change this address depending on your scheduler address
@@ -81,14 +85,13 @@ for run in runs:
 
     print(len(all_paths))
 
-
     for grid in grids:
-        bounds = xybounds.loc[run,grid]
+        bounds = xybounds.loc[run, grid]
 
         # For some of the g3 domains, I had some issues with too much data being loaded into memory at once,
         # so I split up feature detection into multiple subsets
         if grid == "g3":
-            n_split = (len(all_paths)//12)
+            n_split = len(all_paths) // 12
         else:
             n_split = 1
 
@@ -146,7 +149,7 @@ for run in runs:
                 # once loop is finished, concatenate all the figures
                 # then save it to a parquet file
                 all_features = tobac.utils.combine_feature_dataframes(
-                    out,
+                    all_features,
                     renumber_features=False,
                     sort_features_by="frame",
                 )
