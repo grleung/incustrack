@@ -150,7 +150,7 @@ for run in runs:
                 # then save it to a parquet file
                 all_features = tobac.utils.combine_feature_dataframes(
                     all_features,
-                    renumber_features=False,
+                    renumber_features=True,
                     sort_features_by="frame",
                 )
 
